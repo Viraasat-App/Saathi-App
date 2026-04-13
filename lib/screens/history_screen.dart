@@ -90,7 +90,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 m.text.trim().isNotEmpty &&
                 m.text.trim() != _introMessage,
           )
-          .toList();
+          .toList()
+        ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
       _loading = false;
     });
   }
