@@ -3,6 +3,7 @@ import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 
 import '../services/app_settings.dart';
 import '../services/chat_history_storage.dart';
+import '../services/chat_session_snapshot.dart';
 import '../theme/saathi_beige_theme.dart';
 import '../widgets/floating_voice_nav_bar.dart';
 import 'family_screen.dart';
@@ -138,6 +139,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (ok != true) return;
     await ChatHistoryStorage.instance.clearAllLocalChatData();
+    ChatSessionSnapshot.clear();
     if (!mounted) return;
     _showSystemPopup('Chat history cleared');
   }

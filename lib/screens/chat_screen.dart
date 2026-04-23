@@ -17,6 +17,7 @@ import '../models/chat_message.dart';
 import '../services/app_settings.dart';
 import '../services/auth_storage.dart';
 import '../services/chat_history_storage.dart';
+import '../services/chat_session_snapshot.dart';
 import '../services/profile_storage.dart';
 import '../theme/saathi_beige_theme.dart';
 import '../voice/voice_ui_phase.dart';
@@ -81,7 +82,6 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
-  static List<ChatMessage>? _sessionMessages;
   final GlobalKey _bottomBarKey = GlobalKey();
   double _bottomBarHeight = 0;
 
@@ -187,7 +187,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _loadUserId();
-    final previousSession = _sessionMessages;
+    final previousSession = ChatSessionSnapshot.current;
     if (previousSession != null && previousSession.isNotEmpty) {
       _messages.addAll(previousSession);
     }
@@ -482,7 +482,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
-    _sessionMessages = List<ChatMessage>.from(_messages);
+    ChatSessionSnapshot.replace(_messages);
     _userPlayerStateSub?.cancel();
     _botPlayerStateSub?.cancel();
     _nbqPlayerStateSub?.cancel();

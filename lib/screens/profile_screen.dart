@@ -5,6 +5,7 @@ import '../models/user_profile.dart';
 import '../services/auth_service.dart';
 import '../services/auth_storage.dart';
 import '../services/chat_history_storage.dart';
+import '../services/chat_session_snapshot.dart';
 import '../services/profile_storage.dart';
 import '../services/profile_sync_service.dart';
 import '../theme/saathi_beige_theme.dart';
@@ -62,6 +63,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _logout() async {
     await ChatHistoryStorage.instance.clearAllLocalChatData();
+    ChatSessionSnapshot.clear();
     await AuthService.instance.signOut();
     await AuthStorage.instance.logout();
     if (!mounted) return;
