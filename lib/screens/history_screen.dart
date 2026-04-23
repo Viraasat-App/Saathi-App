@@ -25,8 +25,11 @@ class HistoryScreen extends StatefulWidget {
 class _HistoryScreenState extends State<HistoryScreen> {
   static const String _introMessage =
       'Press the microphone to talk to your voice companion.';
+  static const String _aiAccuracyDisclaimer =
+      'AI responses may not always be accurate.';
   List<ChatMessage> _messages = [];
   bool _loading = true;
+  final ScrollController _scrollController = ScrollController();
   final AudioPlayer _player = AudioPlayer();
   final FlutterTts _tts = FlutterTts();
   String? _activeAudioPath;
@@ -79,25 +82,60 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return null;
   }
 
+  /// Oldest at the top, newest at the bottom. Same timestamp: user before bot.
+  static int _historyChronologicalCmp(ChatMessage a, ChatMessage b) {
+    final byTime = a.timestamp.compareTo(b.timestamp);
+    if (byTime != 0) return byTime;
+    if (a.isUser != b.isUser) return a.isUser ? -1 : 1;
+    return 0;
+  }
+
+  static List<ChatMessage> _prepareHistoryMessages(
+    Iterable<ChatMessage> messages,
+  ) {
+    final filtered = messages
+        .where(
+          (m) =>
+              !m.isThinking &&
+              m.text.trim().isNotEmpty &&
+              m.text.trim() != _introMessage,
+        )
+        .toList()
+      ..sort(_historyChronologicalCmp);
+    return filtered;
+  }
+
+  void _scheduleJumpToBottom() {
+    var frames = 0;
+    void afterLayout() {
+      if (!mounted) return;
+      frames++;
+      if (_scrollController.hasClients) {
+        final max = _scrollController.position.maxScrollExtent;
+        if (max > 0) _scrollController.jumpTo(max);
+      }
+      // Variable-height [ListView.builder]: extent can grow over a few layouts.
+      if (frames < 5) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => afterLayout());
+      }
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => afterLayout());
+  }
+
   Future<void> _loadHistory() async {
     final messages = await ChatHistoryStorage.instance.loadMessages();
     if (!mounted) return;
     setState(() {
-      _messages = messages
-          .where(
-            (m) =>
-                !m.isThinking &&
-                m.text.trim().isNotEmpty &&
-                m.text.trim() != _introMessage,
-          )
-          .toList()
-        ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      _messages = _prepareHistoryMessages(messages);
       _loading = false;
     });
+    if (_messages.isNotEmpty) _scheduleJumpToBottom();
   }
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _playerStateSub?.cancel();
     _player.dispose();
     unawaited(_tts.stop());
@@ -269,6 +307,52 @@ class _HistoryScreenState extends State<HistoryScreen> {
   bool _isSameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
+  bool _isCalendarToday(DateTime t) {
+    final now = DateTime.now();
+    return t.year == now.year && t.month == now.month && t.day == now.day;
+  }
+
+  bool get _hasTodayMessages =>
+      _messages.any((m) => _isCalendarToday(m.timestamp));
+
+  /// Older days above; append [Today] + empty hint when nothing logged today.
+  bool get _showTrailingTodayEmpty =>
+      _messages.isNotEmpty && !_hasTodayMessages;
+
+  Widget _dayHeaderPill(BuildContext context, DateTime date) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest.withValues(alpha: 0.85),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(_dayHeader(date)),
+        ),
+      ),
+    );
+  }
+
+  Widget _todayNoMessagesBody(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _dayHeaderPill(context, DateTime.now()),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8, top: 2),
+          child: Text(
+            'No messages',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: SaathiBeige.muted, fontSize: 15),
+          ),
+        ),
+      ],
+    );
+  }
+
   Future<void> _onBottomNavTap(int index) async {
     if (index == 0) {
       Navigator.of(context).popUntil((route) => route.isFirst);
@@ -297,8 +381,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     const contentTop = 8.0;
+    final trailingToday = _showTrailingTodayEmpty ? 1 : 0;
     return Scaffold(
       backgroundColor: SaathiBeige.cream,
       extendBody: true,
@@ -329,18 +413,36 @@ class _HistoryScreenState extends State<HistoryScreen> {
               )
             : _messages.isEmpty
             ? Padding(
-                padding: EdgeInsets.only(top: contentTop),
-                child: Center(
-                  child: Text(
-                    'No chats from the last 7 days',
-                    style: TextStyle(color: SaathiBeige.muted, fontSize: 16),
-                  ),
+                padding: EdgeInsets.fromLTRB(8, contentTop, 8, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: Center(
+                        child: Text(
+                          'No chats from the last 7 days',
+                          style: TextStyle(
+                            color: SaathiBeige.muted,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 132),
+                      child: _todayNoMessagesBody(context),
+                    ),
+                  ],
                 ),
               )
             : ListView.builder(
+              controller: _scrollController,
               padding: EdgeInsets.fromLTRB(8, contentTop, 8, 132),
-              itemCount: _messages.length,
+              itemCount: _messages.length + trailingToday,
               itemBuilder: (context, index) {
+                if (index >= _messages.length) {
+                  return _todayNoMessagesBody(context);
+                }
                 final m = _messages[index];
                 final prev = index == 0 ? null : _messages[index - 1];
                 final needsHeader =
@@ -349,22 +451,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     (m.localBotAudioPath ?? '').trim().isNotEmpty;
                 return Column(
                   children: [
-                    if (needsHeader)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: scheme.surfaceContainerHighest
-                                .withValues(alpha: 0.85),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(_dayHeader(m.timestamp)),
-                        ),
-                      ),
+                    if (needsHeader) _dayHeaderPill(context, m.timestamp),
                     MessageBubble(
                       message: m,
                       onUserAudioTap: m.isUser && !m.isThinking
@@ -417,9 +504,26 @@ class _HistoryScreenState extends State<HistoryScreen> {
         minimum: EdgeInsets.zero,
         child: Padding(
           padding: const EdgeInsets.only(bottom: 8),
-          child: FloatingVoiceNavBar(
-            currentIndex: 1,
-            onSelect: (i) => unawaited(_onBottomNavTap(i)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FloatingVoiceNavBar(
+                currentIndex: 1,
+                onSelect: (i) => unawaited(_onBottomNavTap(i)),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _aiAccuracyDisclaimer,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 9.5,
+                  height: 1.2,
+                  color: SaathiBeige.muted.withValues(alpha: 0.72),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
           ),
         ),
       ),

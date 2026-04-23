@@ -6,6 +6,7 @@ import 'package:sms_autofill/sms_autofill.dart';
 import '../services/auth_service.dart';
 import '../services/auth_storage.dart';
 import '../services/chat_history_storage.dart';
+import '../services/chat_session_snapshot.dart';
 import '../theme/saathi_beige_theme.dart';
 
 class OtpVerificationScreen extends StatefulWidget {
@@ -85,6 +86,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen>
     if (nextUserId.isNotEmpty) {
       await ChatHistoryStorage.instance.clearIfUserChanged(nextUserId);
     }
+    ChatSessionSnapshot.clear();
     await AuthStorage.instance.saveSession(session);
     if (!mounted || _didFinishLogin) return;
     _didFinishLogin = true;
