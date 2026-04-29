@@ -182,10 +182,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   final List<ChatMessage> _messages = [];
+  int _seenClearVersion = 0;
 
   @override
   void initState() {
     super.initState();
+    _seenClearVersion = ChatSessionSnapshot.clearVersion;
     _loadUserId();
     final previousSession = ChatSessionSnapshot.current;
     if (previousSession != null && previousSession.isNotEmpty) {
@@ -1726,6 +1728,19 @@ class _ChatScreenState extends State<ChatScreen> {
     await Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => const SettingsScreen()));
+    if (!mounted) return;
+    if (_seenClearVersion != ChatSessionSnapshot.clearVersion) {
+      setState(() {
+        _messages.clear();
+        _activeUserAudioPath = null;
+        _activeBotAudioPath = null;
+        _isUserAudioPaused = false;
+        _isBotAudioPaused = false;
+        _isBotAudioPlaying = false;
+        _playingNbqTurnId = null;
+      });
+      _seenClearVersion = ChatSessionSnapshot.clearVersion;
+    }
   }
 
   Future<void> _onBottomNavTap(int index) async {
