@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
 
 class MessageBubble extends StatelessWidget {
+  static const Duration _istOffset = Duration(hours: 5, minutes: 30);
   final ChatMessage message;
   final VoidCallback? onNbqSayNow;
   final VoidCallback? onUserAudioTap;
@@ -87,7 +88,8 @@ class MessageBubble extends StatelessWidget {
     );
 
     final showNbqChrome = message.nbqAwaitingVoice && onNbqSayNow != null;
-    final tod = TimeOfDay.fromDateTime(message.timestamp);
+    final istDateTime = message.timestamp.toUtc().add(_istOffset);
+    final tod = TimeOfDay.fromDateTime(istDateTime);
     final minute = tod.minute.toString().padLeft(2, '0');
     final period = tod.period == DayPeriod.am ? 'am' : 'pm';
     final hour12 = (tod.hourOfPeriod == 0 ? 12 : tod.hourOfPeriod).toString();

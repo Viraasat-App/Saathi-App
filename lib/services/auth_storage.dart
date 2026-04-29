@@ -24,10 +24,16 @@ class AuthStorage {
     await prefs.setBool(_keyIsLoggedIn, value);
   }
 
-  Future<void> saveSession(CognitoSession session) async {
+  Future<void> saveSession(CognitoSession session, {String? userIdOverride}) async {
     final prefs = await SharedPreferences.getInstance();
+    final resolvedUserId = userIdOverride?.trim();
     await prefs.setString(_keyCognitoSession, jsonEncode(session.toJson()));
-    await prefs.setString(_keyUserId, session.sub ?? '');
+    await prefs.setString(
+      _keyUserId,
+      (resolvedUserId != null && resolvedUserId.isNotEmpty)
+          ? resolvedUserId
+          : (session.sub ?? ''),
+    );
     await prefs.setBool(_keyIsLoggedIn, true);
   }
 
