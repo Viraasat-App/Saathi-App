@@ -30,7 +30,6 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    _phoneController.addListener(_refreshPhoneInputState);
     _useDevelopmentMode = true;
     _authService.setOtpMode(useDevelopmentOtp: true);
     _applyCountryConstraints(_countryCode);
@@ -38,14 +37,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _phoneController.removeListener(_refreshPhoneInputState);
     _phoneController.dispose();
     super.dispose();
-  }
-
-  void _refreshPhoneInputState() {
-    if (!mounted) return;
-    setState(() {});
   }
 
   void _showMessage(String text) {
@@ -141,11 +134,6 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final busy = _isSendingOtp;
     final scheme = Theme.of(context).colorScheme;
-    final nationalDigits = _phoneController.text.replaceAll(RegExp(r'\D'), '');
-    final canSendOtp =
-        !busy &&
-        nationalDigits.length >= _minNationalDigits &&
-        nationalDigits.length <= _maxNationalDigits;
 
     return Scaffold(
       backgroundColor: SaathiBeige.cream,
@@ -331,32 +319,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                       const SizedBox(height: 16),
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 180),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(16),
-                          boxShadow: canSendOtp
-                              ? [
-                                  BoxShadow(
-                                    color: scheme.primary.withValues(alpha: 0.35),
-                                    blurRadius: 18,
-                                    offset: const Offset(0, 8),
-                                  ),
-                                ]
-                              : const [],
-                        ),
-                        child: SizedBox(
-                          height: 52,
-                          child: ElevatedButton(
-                            onPressed: busy ? null : _sendOtp,
-                            style: canSendOtp
-                                ? ElevatedButton.styleFrom(
-                                    backgroundColor: scheme.primary,
-                                    foregroundColor: scheme.onPrimary,
-                                  )
-                                : null,
-                            child: Text(_isSendingOtp ? 'Sending…' : 'Send OTP'),
-                          ),
+                      SizedBox(
+                        height: 52,
+                        child: ElevatedButton(
+                          onPressed: busy ? null : _sendOtp,
+                          child: Text(_isSendingOtp ? 'Sending…' : 'Send OTP'),
                         ),
                       ),
                     ],

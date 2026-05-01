@@ -82,16 +82,12 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen>
       }
     }
 
-    final enteredOtpDigits = _otpController.text.replaceAll(RegExp(r'\D'), '');
-    final nextUserId =
-        (kDebugMode && _authService.useDevelopmentOtp && enteredOtpDigits.length == 6)
-        ? enteredOtpDigits
-        : (session.sub ?? '');
+    final nextUserId = session.sub ?? '';
     if (nextUserId.isNotEmpty) {
       await ChatHistoryStorage.instance.clearIfUserChanged(nextUserId);
     }
     ChatSessionSnapshot.clear();
-    await AuthStorage.instance.saveSession(session, userIdOverride: nextUserId);
+    await AuthStorage.instance.saveSession(session);
     if (!mounted || _didFinishLogin) return;
     _didFinishLogin = true;
     Navigator.pushNamedAndRemoveUntil(context, '/profile', (route) => false);
