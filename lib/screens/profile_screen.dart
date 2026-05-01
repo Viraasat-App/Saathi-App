@@ -42,10 +42,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(
-            message,
-            style: const TextStyle(color: Colors.black87),
-          ),
+          content: Text(message, style: const TextStyle(color: Colors.black87)),
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 22),
           shape: RoundedRectangleBorder(
@@ -80,9 +77,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           surfaceTintColor: SaathiBeige.surfaceElevated,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
-            side: BorderSide(
-              color: SaathiBeige.accent.withValues(alpha: 0.35),
-            ),
+            side: BorderSide(color: SaathiBeige.accent.withValues(alpha: 0.35)),
           ),
           title: const Text('Logout?'),
           content: const Text('Do you want to logout from this device?'),
@@ -220,9 +215,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final disabledFill = scheme.surfaceContainerHighest.withValues(alpha: 0.75);
     final border = OutlineInputBorder(
       borderRadius: BorderRadius.circular(_inputRadius),
-      borderSide: BorderSide(
-        color: SaathiBeige.accent.withValues(alpha: 0.2),
-      ),
+      borderSide: BorderSide(color: SaathiBeige.accent.withValues(alpha: 0.2)),
     );
     return InputDecoration(
       prefixIcon: icon != null
@@ -300,12 +293,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
         : _nameController.text.trim();
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
+      backgroundColor: SaathiBeige.cream,
       appBar: AppBar(
-        backgroundColor: SaathiBeige.cream.withValues(alpha: 0.92),
+        backgroundColor: SaathiBeige.cream,
+        surfaceTintColor: SaathiBeige.cream,
         foregroundColor: SaathiBeige.charcoal,
         elevation: 0,
+        scrolledUnderElevation: 0,
         title: const Text('Profile'),
+        bottom: const PreferredSize(
+          preferredSize: Size.fromHeight(1.5),
+          child: Divider(
+            height: 1.5,
+            thickness: 1.5,
+            color: SaathiBeige.accentDeep,
+          ),
+        ),
         actions: [
           if (!_isEditing)
             TextButton.icon(
@@ -325,7 +328,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     color: SaathiBeige.accent.withValues(alpha: 0.35),
                   ),
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 backgroundColor: SaathiBeige.surfaceElevated.withValues(
                   alpha: 0.6,
                 ),
@@ -359,7 +365,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     begin: Alignment.topLeft,
                                     end: Alignment.bottomRight,
                                     colors: [
-                                      SaathiBeige.accent.withValues(alpha: 0.45),
+                                      SaathiBeige.accent.withValues(
+                                        alpha: 0.45,
+                                      ),
                                       SaathiBeige.accentDeep.withValues(
                                         alpha: 0.88,
                                       ),
@@ -445,146 +453,150 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   crossAxisAlignment:
                                       CrossAxisAlignment.stretch,
                                   children: [
-                                  TextFormField(
-                                    controller: _nameController,
-                                    enabled: _isEditing,
-                                    textInputAction: TextInputAction.next,
-                                    decoration: _modernDecoration(
-                                      theme: theme,
-                                      label: 'Name',
-                                      icon: Icons.person_rounded,
+                                    TextFormField(
+                                      controller: _nameController,
+                                      enabled: _isEditing,
+                                      textInputAction: TextInputAction.next,
+                                      decoration: _modernDecoration(
+                                        theme: theme,
+                                        label: 'Name',
+                                        icon: Icons.person_rounded,
+                                      ),
+                                      style: const TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      validator: (v) =>
+                                          (v == null || v.trim().isEmpty)
+                                          ? 'Please enter your name.'
+                                          : null,
                                     ),
-                                    style: const TextStyle(
-                                      fontSize: 17,
-                                      fontWeight: FontWeight.w500,
+                                    const SizedBox(height: 14),
+                                    TextFormField(
+                                      controller: _ageController,
+                                      enabled: _isEditing,
+                                      keyboardType: TextInputType.number,
+                                      inputFormatters: [
+                                        FilteringTextInputFormatter.digitsOnly,
+                                      ],
+                                      decoration: _modernDecoration(
+                                        theme: theme,
+                                        label: 'Age',
+                                        icon: Icons.cake_rounded,
+                                      ),
+                                      style: const TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      validator: (v) {
+                                        final raw = v?.trim() ?? '';
+                                        final n = int.tryParse(raw);
+                                        if (n == null || n <= 0) {
+                                          return 'Enter a valid age.';
+                                        }
+                                        return null;
+                                      },
                                     ),
-                                    validator: (v) =>
-                                        (v == null || v.trim().isEmpty)
-                                        ? 'Please enter your name.'
-                                        : null,
-                                  ),
-                                  const SizedBox(height: 14),
-                                  TextFormField(
-                                    controller: _ageController,
-                                    enabled: _isEditing,
-                                    keyboardType: TextInputType.number,
-                                    inputFormatters: [
-                                      FilteringTextInputFormatter.digitsOnly,
-                                    ],
-                                    decoration: _modernDecoration(
-                                      theme: theme,
-                                      label: 'Age',
-                                      icon: Icons.cake_rounded,
-                                    ),
-                                    style: const TextStyle(
-                                      fontSize: 17,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                    validator: (v) {
-                                      final raw = v?.trim() ?? '';
-                                      final n = int.tryParse(raw);
-                                      if (n == null || n <= 0) {
-                                        return 'Enter a valid age.';
-                                      }
-                                      return null;
-                                    },
-                                  ),
-                                  const SizedBox(height: 14),
-                                  DropdownButtonFormField<String>(
-                                    initialValue: _gender,
-                                    items: genderItems
-                                        .map(
-                                          (g) => DropdownMenuItem(
-                                            value: g,
-                                            child: Text(
-                                              g,
-                                              style: TextStyle(
-                                                fontSize: 17,
-                                                color: scheme.onSurface,
-                                                fontWeight: FontWeight.w500,
+                                    const SizedBox(height: 14),
+                                    DropdownButtonFormField<String>(
+                                      initialValue: _gender,
+                                      items: genderItems
+                                          .map(
+                                            (g) => DropdownMenuItem(
+                                              value: g,
+                                              child: Text(
+                                                g,
+                                                style: TextStyle(
+                                                  fontSize: 17,
+                                                  color: scheme.onSurface,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
                                               ),
                                             ),
+                                          )
+                                          .toList(),
+                                      decoration:
+                                          _modernDecoration(
+                                            theme: theme,
+                                            label: 'Gender',
+                                            icon: Icons.people_alt_rounded,
+                                            disabledLook: !_isEditing,
+                                          ).copyWith(
+                                            fillColor: _isEditing
+                                                ? null
+                                                : disabledFill,
                                           ),
-                                        )
-                                        .toList(),
-                                    decoration: _modernDecoration(
-                                      theme: theme,
-                                      label: 'Gender',
-                                      icon: Icons.people_alt_rounded,
-                                      disabledLook: !_isEditing,
-                                    ).copyWith(
-                                      fillColor: _isEditing
-                                          ? null
-                                          : disabledFill,
+                                      dropdownColor:
+                                          scheme.surfaceContainerHighest,
+                                      onChanged: _isEditing
+                                          ? (v) => setState(() => _gender = v)
+                                          : null,
+                                      style: TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w500,
+                                        color: _isEditing
+                                            ? scheme.onSurface
+                                            : scheme.onSurfaceVariant,
+                                      ),
+                                      iconEnabledColor: scheme.onSurface,
+                                      iconDisabledColor:
+                                          scheme.onSurfaceVariant,
+                                      menuMaxHeight: 320,
+                                      validator: (v) => v == null
+                                          ? 'Please select gender.'
+                                          : null,
                                     ),
-                                    dropdownColor:
-                                        scheme.surfaceContainerHighest,
-                                    onChanged: _isEditing
-                                        ? (v) => setState(() => _gender = v)
-                                        : null,
-                                    style: TextStyle(
-                                      fontSize: 17,
-                                      fontWeight: FontWeight.w500,
-                                      color: _isEditing
-                                          ? scheme.onSurface
-                                          : scheme.onSurfaceVariant,
-                                    ),
-                                    iconEnabledColor: scheme.onSurface,
-                                    iconDisabledColor: scheme.onSurfaceVariant,
-                                    menuMaxHeight: 320,
-                                    validator: (v) => v == null
-                                        ? 'Please select gender.'
-                                        : null,
-                                  ),
-                                  const SizedBox(height: 14),
-                                  DropdownButtonFormField<String>(
-                                    initialValue: _language,
-                                    items: languageItems
-                                        .map(
-                                          (l) => DropdownMenuItem(
-                                            value: l,
-                                            child: Text(
-                                              l,
-                                              style: TextStyle(
-                                                fontSize: 17,
-                                                color: scheme.onSurface,
-                                                fontWeight: FontWeight.w500,
+                                    const SizedBox(height: 14),
+                                    DropdownButtonFormField<String>(
+                                      initialValue: _language,
+                                      items: languageItems
+                                          .map(
+                                            (l) => DropdownMenuItem(
+                                              value: l,
+                                              child: Text(
+                                                l,
+                                                style: TextStyle(
+                                                  fontSize: 17,
+                                                  color: scheme.onSurface,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
                                               ),
                                             ),
+                                          )
+                                          .toList(),
+                                      decoration:
+                                          _modernDecoration(
+                                            theme: theme,
+                                            label: 'Language',
+                                            icon: Icons.language_rounded,
+                                            disabledLook: !_isEditing,
+                                          ).copyWith(
+                                            fillColor: _isEditing
+                                                ? null
+                                                : disabledFill,
                                           ),
-                                        )
-                                        .toList(),
-                                    decoration: _modernDecoration(
-                                      theme: theme,
-                                      label: 'Language',
-                                      icon: Icons.language_rounded,
-                                      disabledLook: !_isEditing,
-                                    ).copyWith(
-                                      fillColor: _isEditing
-                                          ? null
-                                          : disabledFill,
+                                      dropdownColor:
+                                          scheme.surfaceContainerHighest,
+                                      onChanged: _isEditing
+                                          ? (v) => setState(() => _language = v)
+                                          : null,
+                                      style: TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w500,
+                                        color: _isEditing
+                                            ? scheme.onSurface
+                                            : scheme.onSurfaceVariant,
+                                      ),
+                                      iconEnabledColor: scheme.onSurface,
+                                      iconDisabledColor:
+                                          scheme.onSurfaceVariant,
+                                      menuMaxHeight: 320,
+                                      validator: (v) => v == null
+                                          ? 'Please select language.'
+                                          : null,
                                     ),
-                                    dropdownColor:
-                                        scheme.surfaceContainerHighest,
-                                    onChanged: _isEditing
-                                        ? (v) => setState(() => _language = v)
-                                        : null,
-                                    style: TextStyle(
-                                      fontSize: 17,
-                                      fontWeight: FontWeight.w500,
-                                      color: _isEditing
-                                          ? scheme.onSurface
-                                          : scheme.onSurfaceVariant,
-                                    ),
-                                    iconEnabledColor: scheme.onSurface,
-                                    iconDisabledColor: scheme.onSurfaceVariant,
-                                    menuMaxHeight: 320,
-                                    validator: (v) => v == null
-                                        ? 'Please select language.'
-                                        : null,
-                                  ),
-                                ],
-                              ),
+                                  ],
+                                ),
                               ),
                               const SizedBox(height: 20),
                               _sectionTitle('Location & work'),
@@ -675,9 +687,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     elevation: 0,
                                   ),
                                   child: Text(
-                                    _isSaving
-                                        ? 'Saving...'
-                                        : 'Save changes',
+                                    _isSaving ? 'Saving...' : 'Save changes',
                                     style: theme.textTheme.titleMedium
                                         ?.copyWith(
                                           color: Colors.white,

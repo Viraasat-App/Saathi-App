@@ -93,15 +93,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
   static List<ChatMessage> _prepareHistoryMessages(
     Iterable<ChatMessage> messages,
   ) {
-    final filtered = messages
-        .where(
-          (m) =>
-              !m.isThinking &&
-              m.text.trim().isNotEmpty &&
-              m.text.trim() != _introMessage,
-        )
-        .toList()
-      ..sort(_historyChronologicalCmp);
+    final filtered =
+        messages
+            .where(
+              (m) =>
+                  !m.isThinking &&
+                  m.text.trim().isNotEmpty &&
+                  m.text.trim() != _introMessage,
+            )
+            .toList()
+          ..sort(_historyChronologicalCmp);
     return filtered;
   }
 
@@ -231,7 +232,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
     if (!await f.exists()) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This response audio is no longer available')),
+        const SnackBar(
+          content: Text('This response audio is no longer available'),
+        ),
       );
       return;
     }
@@ -387,8 +390,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
       backgroundColor: SaathiBeige.cream,
       extendBody: true,
       appBar: AppBar(
-        backgroundColor: SaathiBeige.cream,
-        surfaceTintColor: SaathiBeige.cream,
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
         foregroundColor: SaathiBeige.charcoal,
         elevation: 0,
         scrolledUnderElevation: 0,
@@ -396,16 +399,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
         flexibleSpace: const DecoratedBox(
           decoration: BoxDecoration(gradient: SaathiBeige.backgroundGradient),
         ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(
-            height: 1,
-            color: SaathiBeige.accent.withValues(alpha: 0.2),
+        bottom: const PreferredSize(
+          preferredSize: Size.fromHeight(1.5),
+          child: Divider(
+            height: 1.5,
+            thickness: 1.5,
+            color: SaathiBeige.accentDeep,
           ),
         ),
       ),
       body: DecoratedBox(
-        decoration: const BoxDecoration(gradient: SaathiBeige.backgroundGradient),
+        decoration: const BoxDecoration(
+          gradient: SaathiBeige.backgroundGradient,
+        ),
         child: _loading
             ? Padding(
                 padding: EdgeInsets.only(top: contentTop),
@@ -436,68 +442,74 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 ),
               )
             : ListView.builder(
-              controller: _scrollController,
-              padding: EdgeInsets.fromLTRB(8, contentTop, 8, 132),
-              itemCount: _messages.length + trailingToday,
-              itemBuilder: (context, index) {
-                if (index >= _messages.length) {
-                  return _todayNoMessagesBody(context);
-                }
-                final m = _messages[index];
-                final prev = index == 0 ? null : _messages[index - 1];
-                final needsHeader =
-                    prev == null || !_isSameDay(prev.timestamp, m.timestamp);
-                final hasBotPath =
-                    (m.localBotAudioPath ?? '').trim().isNotEmpty;
-                return Column(
-                  children: [
-                    if (needsHeader) _dayHeaderPill(context, m.timestamp),
-                    MessageBubble(
-                      message: m,
-                      onUserAudioTap: m.isUser && !m.isThinking
-                          ? () => _playUserAudio(m)
-                          : null,
-                      isUserAudioActive:
-                          m.localUserAudioPath != null &&
-                          m.localUserAudioPath == _activeAudioPath,
-                      isUserAudioPaused:
-                          m.localUserAudioPath != null &&
-                          m.localUserAudioPath == _activeAudioPath &&
-                          _isAudioPaused,
-                      onUserAudioPause:
-                          m.localUserAudioPath != null &&
-                              m.localUserAudioPath == _activeAudioPath
-                          ? _pauseOrResumeAudio
-                          : null,
-                      onUserAudioStop:
-                          m.localUserAudioPath != null &&
-                              m.localUserAudioPath == _activeAudioPath
-                          ? _stopAudio
-                          : null,
-                      onBotAudioTap: !m.isUser &&
-                              !m.isThinking &&
-                              m.text.trim().isNotEmpty &&
-                              hasBotPath
-                          ? () => _playBotAudio(m)
-                          : null,
-                      onBotAudioPause: (m.localBotAudioPath ?? '').isNotEmpty &&
-                              m.localBotAudioPath == _activeAudioPath
-                          ? _pauseOrResumeAudio
-                          : null,
-                      onBotAudioStop: (m.localBotAudioPath ?? '').isNotEmpty &&
-                              m.localBotAudioPath == _activeAudioPath
-                          ? _stopAudio
-                          : null,
-                      isBotAudioActive: (m.localBotAudioPath ?? '').isNotEmpty &&
-                          m.localBotAudioPath == _activeAudioPath,
-                      isBotAudioPaused: (m.localBotAudioPath ?? '').isNotEmpty &&
-                          m.localBotAudioPath == _activeAudioPath &&
-                          _isAudioPaused,
-                    ),
-                  ],
-                );
-              },
-            ),
+                controller: _scrollController,
+                padding: EdgeInsets.fromLTRB(8, contentTop, 8, 132),
+                itemCount: _messages.length + trailingToday,
+                itemBuilder: (context, index) {
+                  if (index >= _messages.length) {
+                    return _todayNoMessagesBody(context);
+                  }
+                  final m = _messages[index];
+                  final prev = index == 0 ? null : _messages[index - 1];
+                  final needsHeader =
+                      prev == null || !_isSameDay(prev.timestamp, m.timestamp);
+                  final hasBotPath = (m.localBotAudioPath ?? '')
+                      .trim()
+                      .isNotEmpty;
+                  return Column(
+                    children: [
+                      if (needsHeader) _dayHeaderPill(context, m.timestamp),
+                      MessageBubble(
+                        message: m,
+                        onUserAudioTap: m.isUser && !m.isThinking
+                            ? () => _playUserAudio(m)
+                            : null,
+                        isUserAudioActive:
+                            m.localUserAudioPath != null &&
+                            m.localUserAudioPath == _activeAudioPath,
+                        isUserAudioPaused:
+                            m.localUserAudioPath != null &&
+                            m.localUserAudioPath == _activeAudioPath &&
+                            _isAudioPaused,
+                        onUserAudioPause:
+                            m.localUserAudioPath != null &&
+                                m.localUserAudioPath == _activeAudioPath
+                            ? _pauseOrResumeAudio
+                            : null,
+                        onUserAudioStop:
+                            m.localUserAudioPath != null &&
+                                m.localUserAudioPath == _activeAudioPath
+                            ? _stopAudio
+                            : null,
+                        onBotAudioTap:
+                            !m.isUser &&
+                                !m.isThinking &&
+                                m.text.trim().isNotEmpty &&
+                                hasBotPath
+                            ? () => _playBotAudio(m)
+                            : null,
+                        onBotAudioPause:
+                            (m.localBotAudioPath ?? '').isNotEmpty &&
+                                m.localBotAudioPath == _activeAudioPath
+                            ? _pauseOrResumeAudio
+                            : null,
+                        onBotAudioStop:
+                            (m.localBotAudioPath ?? '').isNotEmpty &&
+                                m.localBotAudioPath == _activeAudioPath
+                            ? _stopAudio
+                            : null,
+                        isBotAudioActive:
+                            (m.localBotAudioPath ?? '').isNotEmpty &&
+                            m.localBotAudioPath == _activeAudioPath,
+                        isBotAudioPaused:
+                            (m.localBotAudioPath ?? '').isNotEmpty &&
+                            m.localBotAudioPath == _activeAudioPath &&
+                            _isAudioPaused,
+                      ),
+                    ],
+                  );
+                },
+              ),
       ),
       bottomNavigationBar: SafeArea(
         top: false,
