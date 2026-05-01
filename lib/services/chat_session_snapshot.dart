@@ -6,10 +6,8 @@ class ChatSessionSnapshot {
   ChatSessionSnapshot._();
 
   static List<ChatMessage>? _messages;
-  static int _clearVersion = 0;
 
   static List<ChatMessage>? get current => _messages;
-  static int get clearVersion => _clearVersion;
 
   static void replace(List<ChatMessage> messages) {
     _messages = List<ChatMessage>.from(messages);
@@ -17,6 +15,5 @@ class ChatSessionSnapshot {
 
   static void clear() {
     _messages = null;
-    _clearVersion += 1;
   }
 }

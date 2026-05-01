@@ -48,6 +48,7 @@ dependencies:
   sms_autofill: ^2.4.1
   just_audio: ^0.10.5
   path_provider: ^2.1.5
+  web_socket_channel: ^3.0.3
 
 dev_dependencies:
   flutter_test:

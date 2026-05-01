@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
@@ -16,9 +17,11 @@ import 'package:record/record.dart';
 import '../models/chat_message.dart';
 import '../services/app_settings.dart';
 import '../services/auth_storage.dart';
+import '../services/backend_config.dart';
 import '../services/chat_history_storage.dart';
 import '../services/chat_session_snapshot.dart';
 import '../services/profile_storage.dart';
+import '../services/sarvam_streaming_service.dart';
 import '../theme/saathi_beige_theme.dart';
 import '../voice/voice_ui_phase.dart';
 import '../widgets/floating_voice_nav_bar.dart';
@@ -115,10 +118,15 @@ class _ChatScreenState extends State<ChatScreen> {
       'https://i8g5rlsv55.execute-api.ap-south-1.amazonaws.com/upload-audio';
   static const String _transcriptEndpoint =
       'https://v3y43z8hj3.execute-api.ap-south-1.amazonaws.com/get-transcript';
+  static const String _streamingTranscribeEndpoint =
+      BackendConfig.streamingTranscribeEndpoint;
+  static const String _streamingProxyWsEndpoint =
+      BackendConfig.streamingProxyWsEndpoint;
 
   static const Duration _uploadPostTimeout = Duration(seconds: 45);
   static const Duration _uploadPutTimeout = Duration(minutes: 3);
   static const Duration _transcriptGetTimeout = Duration(seconds: 30);
+  static const Duration _streamingPostTimeout = Duration(seconds: 45);
 
   /// Poll for presigned NBQ audio: 2s × 10 = 20s max wait before giving up.
   static const int _maxNbqAudioUrlPolls = 10;
@@ -149,18 +157,50 @@ class _ChatScreenState extends State<ChatScreen> {
 
   static const String _errFollowUpTimeout =
       'Follow-up question error: the next question took too long to load. You can record again to continue.';
+  static const String _errStreamingFailed =
+      'Streaming transcription failed. Please check your connection and try again.';
 
   static const String _errUnexpected =
       'Something went wrong. Please try again.';
+
+  static const String _stageStreamingTranscription = 'Transcribing recording...';
 
   /// Bumps each new recording turn so stale NBQ polls stop.
   int _nbqPlaybackGeneration = 0;
 
   final Map<String, _NbqVoiceSession> _nbqVoiceSessions = {};
   int _nbqTurnSeq = 0;
+  final SarvamStreamingService _sarvamStreaming = SarvamStreamingService(
+    websocketProxyUrl: _streamingProxyWsEndpoint,
+  );
+  StreamSubscription<String>? _livePartialSub;
+  StreamSubscription<String>? _liveFinalSub;
+  StreamSubscription<String>? _liveErrorSub;
+  StreamSubscription<SarvamSpeechEvent>? _liveSpeechEventSub;
+  StreamSubscription<Uint8List>? _liveAudioSub;
+  final BytesBuilder _livePcmBuffer = BytesBuilder(copy: false);
+  final BytesBuilder _activeUtterancePcmBuffer = BytesBuilder(copy: false);
+  Uint8List? _readyUtterancePcm;
+  String _latestPartialTranscript = '';
+  bool _serverSpeechActive = false;
+  int? _liveTranscriptMessageIndex;
+  final List<({String transcript, Uint8List pcmBytes, int? messageIndex})>
+      _pendingStreamingTurns = [];
+  bool _turnProcessingInFlight = false;
+  bool _autoListenArmedByCompletedBotAudio = false;
+  Timer? _silenceAutoStopTimer;
+  static const Duration _silenceAutoStopDelay = Duration(seconds: 2);
+  final StringBuffer _debouncedTranscriptBuffer = StringBuffer();
+  final BytesBuilder _debouncedPcmBuffer = BytesBuilder(copy: false);
+  int? _debouncedMessageIndex;
 
   final RecordConfig _recordConfig = const RecordConfig(
     encoder: AudioEncoder.wav,
+    numChannels: 1,
+  );
+  final RecordConfig _liveStreamRecordConfig = const RecordConfig(
+    encoder: AudioEncoder.pcm16bits,
+    sampleRate: 16000,
     numChannels: 1,
   );
 
@@ -182,12 +222,16 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   final List<ChatMessage> _messages = [];
-  int _seenClearVersion = 0;
 
   @override
   void initState() {
     super.initState();
-    _seenClearVersion = ChatSessionSnapshot.clearVersion;
+    if (kDebugMode) {
+      debugPrint(
+        '[streaming] endpoint=$_streamingTranscribeEndpoint '
+        'proxyWs=$_streamingProxyWsEndpoint',
+      );
+    }
     _loadUserId();
     final previousSession = ChatSessionSnapshot.current;
     if (previousSession != null && previousSession.isNotEmpty) {
@@ -491,6 +535,12 @@ class _ChatScreenState extends State<ChatScreen> {
     unawaited(_userAudioPlayer.dispose());
     unawaited(_botAudioPlayer.dispose());
     _stopMicLevelMonitoring();
+    _livePartialSub?.cancel();
+    _liveFinalSub?.cancel();
+    _liveSpeechEventSub?.cancel();
+    _liveAudioSub?.cancel();
+    unawaited(_sarvamStreaming.close());
+    _sarvamStreaming.dispose();
     _bargeAmpSub?.cancel();
     unawaited(_bargeInRecorder.dispose());
     unawaited(_tts.stop());
@@ -844,6 +894,7 @@ class _ChatScreenState extends State<ChatScreen> {
       session.finished = true;
       _nbqVoiceSessions.remove(turnId);
       _clearNbqAwaitingForTurnId(turnId);
+      _autoListenArmedByCompletedBotAudio = true;
       unawaited(_startAutoVoiceTurn());
       return true;
     }
@@ -926,8 +977,31 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _startAutoVoiceTurn() async {
-    // Keep mic off after bot response; user starts next turn manually.
-    return;
+    if (!mounted) return;
+    // Strict turn-taking: only auto-listen when bot audio finished cleanly.
+    if (!_autoListenArmedByCompletedBotAudio) return;
+    if (_isRecording || _isBotAudioPlaying) return;
+
+    // Give UI/audio teardown a moment to settle before opening mic again.
+    await Future.delayed(const Duration(milliseconds: 250));
+    if (!mounted) return;
+    if (_isRecording || _isBotAudioPlaying) return;
+
+    // Backend follow-up polling can transiently hold processing=true even after
+    // bot voice is done. Wait briefly so hands-free turn-taking feels natural.
+    for (var i = 0; i < 12; i++) {
+      if (!mounted) return;
+      if (!_isProcessing) break;
+      await Future.delayed(const Duration(milliseconds: 250));
+    }
+
+    if (!mounted) return;
+    if (_isRecording || _isBotAudioPlaying) return;
+    // Do not force clear processing state; it causes overlapping turns and
+    // stale "Listening.../Getting transcript..." bubbles.
+    if (_isProcessing) return;
+    _autoListenArmedByCompletedBotAudio = false;
+    await startRecording();
   }
 
   Future<void> _stopBargeInMonitor() async {
@@ -982,7 +1056,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> startRecording() async {
-    if (_isProcessing || _isBotAudioPlaying) return;
+    _autoListenArmedByCompletedBotAudio = false;
+    if (_isRecording || _isBotAudioPlaying) return;
 
     // Request permission on first tap (and again if needed).
     final status = await Permission.microphone.request();
@@ -998,32 +1073,105 @@ class _ChatScreenState extends State<ChatScreen> {
     _stopMicLevelMonitoring();
     await _tts.stop();
     await _nbqAudioPlayer.stop();
-
-    final dir = Directory.systemTemp;
-    final safeUserId = (_userId == null || _userId!.isEmpty)
-        ? 'anonymous'
-        : _userId!.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
-    final path = '${dir.path}/$safeUserId.wav';
-
-    setState(() {
-      _isRecording = true;
-      _audioId = path;
-    });
+    _livePcmBuffer.clear();
+    _activeUtterancePcmBuffer.clear();
+    _readyUtterancePcm = null;
+    _latestPartialTranscript = '';
+    _serverSpeechActive = false;
+    _liveTranscriptMessageIndex = null;
+    _silenceAutoStopTimer?.cancel();
+    _debouncedTranscriptBuffer.clear();
+    _debouncedPcmBuffer.clear();
+    _debouncedMessageIndex = null;
+    _pendingStreamingTurns.clear();
+    _turnProcessingInFlight = false;
+    await _livePartialSub?.cancel();
+    await _liveFinalSub?.cancel();
+    await _liveErrorSub?.cancel();
+    await _liveSpeechEventSub?.cancel();
+    await _liveAudioSub?.cancel();
 
     try {
-      await _audioRecorder.start(_recordConfig, path: path);
+      await _sarvamStreaming.connect();
+      _livePartialSub = _sarvamStreaming.partialTranscripts.listen((partial) {
+        _latestPartialTranscript = partial;
+        _upsertLivePartialTranscript(partial);
+      }, onError: (error) {
+        if (kDebugMode) debugPrint('[streaming] partial stream error: $error');
+      });
+      _liveErrorSub = _sarvamStreaming.errors.listen((message) {
+        if (kDebugMode) debugPrint('[streaming] server error: $message');
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Streaming failed: $message')));
+      });
+      _liveSpeechEventSub = _sarvamStreaming.speechEvents.listen((event) {
+        if (event == SarvamSpeechEvent.startSpeech) {
+          _silenceAutoStopTimer?.cancel();
+          _serverSpeechActive = true;
+          _activeUtterancePcmBuffer.clear();
+          _ensureLivePlaceholderMessage();
+          return;
+        }
+        _serverSpeechActive = false;
+        _readyUtterancePcm = _activeUtterancePcmBuffer.takeBytes();
+        _silenceAutoStopTimer?.cancel();
+        _silenceAutoStopTimer = Timer(_silenceAutoStopDelay, () {
+          if (!mounted || !_isRecording || _isProcessing || _isBotAudioPlaying) {
+            return;
+          }
+          unawaited(_stopRecordingAndSend());
+        });
+      });
+      _liveFinalSub = _sarvamStreaming.finalTranscripts.listen((finalText) {
+        final t = finalText.trim();
+        if (t.isEmpty) return;
+        final utterancePcm = _readyUtterancePcm ?? Uint8List(0);
+        _readyUtterancePcm = null;
+        if (_debouncedTranscriptBuffer.isNotEmpty) {
+          _debouncedTranscriptBuffer.write(' ');
+        }
+        _debouncedTranscriptBuffer.write(t);
+        if (utterancePcm.isNotEmpty) {
+          _debouncedPcmBuffer.add(utterancePcm);
+        }
+        _debouncedMessageIndex ??= _liveTranscriptMessageIndex;
+      }, onError: (error) {
+        if (kDebugMode) debugPrint('[streaming] final stream error: $error');
+      });
+      final stream = await _audioRecorder.startStream(_liveStreamRecordConfig);
+      _liveAudioSub = stream.listen(
+        (chunk) {
+          _livePcmBuffer.add(chunk);
+          if (_serverSpeechActive) {
+            _activeUtterancePcmBuffer.add(chunk);
+          }
+          _sarvamStreaming.sendAudioChunk(chunk);
+        },
+        onError: (_) {},
+      );
+
       if (!mounted) return;
+      setState(() {
+        _isRecording = true;
+      });
       HapticFeedback.lightImpact();
       _startMicLevelMonitoring();
-    } catch (_) {
-      // If recorder fails, reset UI.
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('[streaming] failed to start live recording: $e');
+        debugPrint('$st');
+      }
+      final message = e.toString().contains('Missing STREAMING_PROXY_WS_ENDPOINT')
+          ? 'Live streaming is not configured. Set STREAMING_PROXY_WS_ENDPOINT.'
+          : 'Could not start live streaming recording';
       if (!mounted) return;
       setState(() {
         _isRecording = false;
-        _audioId = null;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not start microphone recording')),
+        SnackBar(content: Text(message)),
       );
     }
   }
@@ -1038,7 +1186,6 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _stopRecordingAndSend() async {
-    if (_isProcessing) return;
     _stopMicLevelMonitoring();
     if (mounted) {
       setState(() => _micInputLevel = 0);
@@ -1047,23 +1194,125 @@ class _ChatScreenState extends State<ChatScreen> {
       _isRecording = false;
       _isProcessing = true;
     });
+    _silenceAutoStopTimer?.cancel();
 
-    final recordedPath = await stopRecording();
-    final audioId = recordedPath ?? _audioId;
-    if (audioId == null) {
-      if (!mounted) return;
-      setState(() => _isProcessing = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Recording error: we could not save your recording. Please try again.',
-          ),
+    await _liveAudioSub?.cancel();
+    _liveAudioSub = null;
+    try {
+      await _audioRecorder.stop();
+    } catch (_) {}
+    // Ask server to finalize any buffered speech before closing socket/listeners.
+    try {
+      await _sarvamStreaming.requestFlush();
+      await Future.delayed(const Duration(milliseconds: 900));
+    } catch (_) {}
+    await _liveFinalSub?.cancel();
+    _liveFinalSub = null;
+    await _liveErrorSub?.cancel();
+    _liveErrorSub = null;
+    await _liveSpeechEventSub?.cancel();
+    _liveSpeechEventSub = null;
+    await _livePartialSub?.cancel();
+    _livePartialSub = null;
+    await _sarvamStreaming.close();
+    _serverSpeechActive = false;
+    _readyUtterancePcm = null;
+    _liveTranscriptMessageIndex = null;
+    _flushDebouncedStreamingTurn();
+    await _drainStreamingTurnQueue();
+    if (mounted) {
+      setState(() {
+        _isProcessing = false;
+      });
+    }
+  }
+
+  void _ensureLivePlaceholderMessage() {
+    if (!mounted) return;
+    if (_liveTranscriptMessageIndex != null) return;
+    setState(() {
+      _messages.add(
+        _newMessage(
+          text: 'Listening...',
+          isUser: true,
+          isThinking: true,
         ),
       );
-      unawaited(_startAutoVoiceTurn());
-      return;
+      _liveTranscriptMessageIndex = _messages.length - 1;
+    });
+    _scrollToBottom();
+  }
+
+  void _upsertLivePartialTranscript(String partial) {
+    if (!mounted) return;
+    final trimmed = partial.trim();
+    if (trimmed.isEmpty) return;
+    _ensureLivePlaceholderMessage();
+    final idx = _liveTranscriptMessageIndex;
+    if (idx == null || idx < 0 || idx >= _messages.length) return;
+    setState(() {
+      final existing = _messages[idx];
+      _messages[idx] = ChatMessage(
+        text: trimmed,
+        isUser: true,
+        isThinking: true,
+        timestamp: existing.timestamp,
+        localUserAudioPath: existing.localUserAudioPath,
+        localBotAudioPath: existing.localBotAudioPath,
+      );
+    });
+  }
+
+  void _flushDebouncedStreamingTurn() {
+    final transcript = _debouncedTranscriptBuffer.toString().trim();
+    if (transcript.isEmpty) return;
+    final pcmBytes = _debouncedPcmBuffer.takeBytes();
+    final messageIndex = _debouncedMessageIndex;
+    _debouncedTranscriptBuffer.clear();
+    _debouncedPcmBuffer.clear();
+    _debouncedMessageIndex = null;
+    _pendingStreamingTurns.add((
+      transcript: transcript,
+      pcmBytes: pcmBytes,
+      messageIndex: messageIndex,
+    ));
+    unawaited(_drainStreamingTurnQueue());
+  }
+
+  Future<void> _drainStreamingTurnQueue() async {
+    if (_turnProcessingInFlight) return;
+    _turnProcessingInFlight = true;
+    try {
+      while (_pendingStreamingTurns.isNotEmpty) {
+        final turn = _pendingStreamingTurns.removeAt(0);
+        await _processStreamingTurn(
+          transcript: turn.transcript,
+          pcmBytes: turn.pcmBytes,
+          messageIndex: turn.messageIndex,
+        );
+      }
+    } finally {
+      _turnProcessingInFlight = false;
+      if (mounted && !_isRecording) {
+        setState(() => _isProcessing = false);
+      }
     }
-    final localUserAudioPath = await _copyUserAudioToLocalHistory(audioId);
+  }
+
+  Future<void> _processStreamingTurn({
+    required String transcript,
+    required Uint8List pcmBytes,
+    required int? messageIndex,
+  }) async {
+    if (!mounted) return;
+    final trimmed = transcript.trim();
+    if (trimmed.isEmpty) return;
+    if (mounted) {
+      setState(() => _isProcessing = true);
+    }
+    final wavBytes = _pcm16ToWavBytes(pcmBytes);
+    final tempWavPath = await _writeWavToTempFile(wavBytes);
+    final localUserAudioPath = await _copyUserAudioToLocalHistory(tempWavPath);
 
     void setUserProgressStage(int index, String label) {
       if (!mounted) return;
@@ -1082,45 +1331,55 @@ class _ChatScreenState extends State<ChatScreen> {
       _scrollToBottom();
     }
 
-    var processingMessageIndex = -1;
-    if (mounted) {
-      setState(() {
-        _messages.add(
-          _newMessage(
-            text: _stageRequestingUploadLink,
-            isUser: true,
-            isThinking: true,
-            localUserAudioPath: localUserAudioPath,
-          ),
-        );
-        processingMessageIndex = _messages.length - 1;
-      });
-      _scrollToBottom();
+    var processingMessageIndex = messageIndex ?? -1;
+    if (processingMessageIndex < 0 ||
+        processingMessageIndex >= _messages.length ||
+        !_messages[processingMessageIndex].isUser) {
+      if (mounted) {
+        setState(() {
+          _messages.add(
+            _newMessage(
+              text: _stageRequestingUploadLink,
+              isUser: true,
+              isThinking: true,
+              localUserAudioPath: localUserAudioPath,
+            ),
+          );
+          processingMessageIndex = _messages.length - 1;
+        });
+        _scrollToBottom();
+      }
+    } else {
+      setUserProgressStage(processingMessageIndex, _stageStreamingTranscription);
     }
 
     try {
-      final uploadedFileName = await _uploadRecording(
-        audioId,
-        onStage: (label) => setUserProgressStage(processingMessageIndex, label),
-      );
+      ({String transcript, String? audioKey}) streamingResult;
+      try {
+        setUserProgressStage(processingMessageIndex, _stageStreamingTranscription);
+        streamingResult = await _postToStreamingBackend(
+          transcript: trimmed,
+          wavBytes: wavBytes,
+        );
+      } catch (streamErr, streamSt) {
+        debugPrint('Live streaming path failed, falling back: $streamErr');
+        debugPrint('$streamSt');
+        final uploadedFileName = await _uploadRecording(
+          tempWavPath,
+          onStage: (label) => setUserProgressStage(processingMessageIndex, label),
+        );
+        final fallbackPayload = await _waitForTranscriptPayload(
+          uploadedFileName,
+          onStage: (label) => setUserProgressStage(processingMessageIndex, label),
+        );
+        streamingResult = (
+          transcript: fallbackPayload.transcript,
+          audioKey: uploadedFileName,
+        );
+      }
       if (!mounted) return;
-
-      final payload = await _waitForTranscriptPayload(
-        uploadedFileName,
-        onStage: (label) => setUserProgressStage(processingMessageIndex, label),
-      );
-      if (!mounted) return;
-      _nbqPlaybackGeneration++;
-      final playbackGen = _nbqPlaybackGeneration;
-
-      final nbqImmediate = payload.nextBestQuestion?.trim();
-      final nbqTurnId = (nbqImmediate != null && nbqImmediate.isNotEmpty)
-          ? _nextNbqTurnId()
-          : null;
-      int? nbqTypingIndex;
-      int? nbqMessageIndex;
+      final payload = _TranscriptNbqResult(transcript: streamingResult.transcript);
       setState(() {
-        _stripStaleNbqVoiceChromeInPlace(playbackGen);
         if (processingMessageIndex >= 0 &&
             processingMessageIndex < _messages.length) {
           final existing = _messages[processingMessageIndex];
@@ -1129,73 +1388,45 @@ class _ChatScreenState extends State<ChatScreen> {
             isUser: true,
             isThinking: false,
             timestamp: existing.timestamp,
-            localUserAudioPath: existing.localUserAudioPath,
+            localUserAudioPath: existing.localUserAudioPath ?? localUserAudioPath,
             localBotAudioPath: existing.localBotAudioPath,
           );
-        } else {
-          _messages.add(
-            _newMessage(
-              text: payload.transcript,
-              isUser: true,
-              isThinking: false,
-              localUserAudioPath: localUserAudioPath,
-            ),
-          );
         }
-        if (nbqImmediate != null &&
-            nbqImmediate.isNotEmpty &&
-            nbqTurnId != null) {
-          _messages.add(
-            _newMessage(
-              text: nbqImmediate,
-              isUser: false,
-              isThinking: false,
-              nbqAwaitingVoice: true,
-              nbqTurnId: nbqTurnId,
-              nbqVoiceGeneration: playbackGen,
-            ),
-          );
-          nbqMessageIndex = _messages.length - 1;
-        } else {
-          _messages.add(
-            _newMessage(
-              text: _stageLoadingFollowUp,
-              isUser: false,
-              isThinking: true,
-            ),
-          );
-          nbqTypingIndex = _messages.length - 1;
-        }
+        _messages.add(
+          _newMessage(
+            text: _stageLoadingFollowUp,
+            isUser: false,
+            isThinking: true,
+          ),
+        );
       });
       _scrollToBottom();
       unawaited(_saveChatHistory());
-
-      final nbqIdx = nbqMessageIndex;
-      final tid = nbqTurnId;
-      if (nbqImmediate != null &&
-          nbqImmediate.isNotEmpty &&
-          nbqIdx != null &&
-          tid != null) {
-        _nbqVoiceSessions[tid] = _NbqVoiceSession(
-          turnId: tid,
-          generation: playbackGen,
-          nbqText: nbqImmediate,
-          uploadedFileName: uploadedFileName,
+      final uploadedFileName = streamingResult.audioKey?.trim();
+      if (uploadedFileName != null && uploadedFileName.isNotEmpty) {
+        final typingMessageIndex = _messages.length - 1;
+        final generation = _nbqPlaybackGeneration;
+        unawaited(
+          _pollNextBestQuestion(uploadedFileName, typingMessageIndex, generation),
         );
+      } else {
         if (mounted) {
-          await _resolveAndPlayNbqVoice(
-            uploadedFileName: uploadedFileName,
-            nbqText: nbqImmediate,
-            turnId: tid,
-            initialAudioUrl: payload.nbqAudioUrl,
-            generation: playbackGen,
-          );
+          setState(() {
+            final lastIndex = _messages.length - 1;
+            if (lastIndex >= 0 &&
+                !_messages[lastIndex].isUser &&
+                _messages[lastIndex].isThinking) {
+              final existing = _messages[lastIndex];
+              _messages[lastIndex] = ChatMessage(
+                text: _errFollowUpTimeout,
+                isUser: false,
+                isThinking: false,
+                timestamp: existing.timestamp,
+                localBotAudioPath: existing.localBotAudioPath,
+              );
+            }
+          });
         }
-      }
-
-      final typingIdx = nbqTypingIndex;
-      if (typingIdx != null) {
-        await _pollNextBestQuestion(uploadedFileName, typingIdx, playbackGen);
       }
     } catch (e, st) {
       debugPrint('Upload/transcript flow failed: $e');
@@ -1227,22 +1458,15 @@ class _ChatScreenState extends State<ChatScreen> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(userFacing)));
-      unawaited(_startAutoVoiceTurn());
     } finally {
-      if (localUserAudioPath != null &&
-          !(_messages.any((m) => m.localUserAudioPath == localUserAudioPath))) {
-        try {
-          final orphan = File(localUserAudioPath);
-          if (await orphan.exists()) {
-            await orphan.delete();
-          }
-        } catch (_) {}
-      }
-      if (mounted) {
-        setState(() {
-          _isProcessing = false;
-          _audioId = null;
-        });
+      try {
+        final temp = File(tempWavPath);
+        if (await temp.exists()) {
+          await temp.delete();
+        }
+      } catch (_) {}
+      if (mounted && !_isRecording && _pendingStreamingTurns.isEmpty) {
+        setState(() => _isProcessing = false);
       }
     }
   }
@@ -1335,6 +1559,95 @@ class _ChatScreenState extends State<ChatScreen> {
       debugPrint('[transcript] fileKey for API (use full S3 path): $fileKey');
     }
     return fileKey;
+  }
+
+  Future<({String transcript, String? audioKey})> _postToStreamingBackend({
+    required String transcript,
+    required Uint8List wavBytes,
+  }) async {
+    if (_streamingTranscribeEndpoint.trim().isEmpty) {
+      throw const _TranscriptFlowException(_errStreamingFailed);
+    }
+    final userId = (_userId == null || _userId!.isEmpty) ? 'anonymous' : _userId!;
+    final audioBase64 = base64Encode(wavBytes);
+    late final http.Response response;
+    try {
+      response = await http
+          .post(
+            Uri.parse(_streamingTranscribeEndpoint),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'user_id': userId,
+              'session_date': DateTime.now().toIso8601String().substring(0, 10),
+              'transcript': transcript,
+              'audio_base64': audioBase64,
+              'sample_rate': 16000,
+              'timestamp': DateTime.now().toIso8601String(),
+            }),
+          )
+          .timeout(_streamingPostTimeout);
+    } on TimeoutException {
+      throw const _TranscriptFlowException(_errStreamingFailed);
+    } catch (_) {
+      throw const _TranscriptFlowException(_errStreamingFailed);
+    }
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw const _TranscriptFlowException(_errStreamingFailed);
+    }
+
+    final parsed = jsonDecode(response.body);
+    if (parsed is! Map<String, dynamic>) {
+      throw const _TranscriptFlowException(_errStreamingFailed);
+    }
+
+    final parsedTranscript = (parsed['transcript'] as String?)?.trim() ?? '';
+    final saved = parsed['saved'];
+    final audioKey = saved is Map<String, dynamic> ? saved['audio'] as String? : null;
+    if (parsedTranscript.isEmpty) {
+      throw const _TranscriptFlowException(_errStreamingFailed);
+    }
+    return (transcript: parsedTranscript, audioKey: audioKey);
+  }
+
+  Uint8List _pcm16ToWavBytes(Uint8List pcmBytes, {int sampleRate = 16000}) {
+    final totalDataLen = pcmBytes.length;
+    final totalLen = 44 + totalDataLen;
+    final out = BytesBuilder(copy: false);
+    final header = ByteData(44);
+    void writeString(int offset, String value) {
+      for (var i = 0; i < value.length; i++) {
+        header.setUint8(offset + i, value.codeUnitAt(i));
+      }
+    }
+
+    writeString(0, 'RIFF');
+    header.setUint32(4, totalLen - 8, Endian.little);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    header.setUint32(16, 16, Endian.little);
+    header.setUint16(20, 1, Endian.little); // PCM
+    header.setUint16(22, 1, Endian.little); // mono
+    header.setUint32(24, sampleRate, Endian.little);
+    header.setUint32(28, sampleRate * 2, Endian.little); // byte rate
+    header.setUint16(32, 2, Endian.little); // block align
+    header.setUint16(34, 16, Endian.little); // bits per sample
+    writeString(36, 'data');
+    header.setUint32(40, totalDataLen, Endian.little);
+    out.add(header.buffer.asUint8List());
+    out.add(pcmBytes);
+    return out.toBytes();
+  }
+
+  Future<String> _writeWavToTempFile(Uint8List wavBytes) async {
+    final safeUserId = (_userId == null || _userId!.isEmpty)
+        ? 'anonymous'
+        : _userId!.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    final dir = Directory.systemTemp;
+    final path = '${dir.path}/${safeUserId}_${DateTime.now().millisecondsSinceEpoch}.wav';
+    final file = File(path);
+    await file.writeAsBytes(wavBytes, flush: true);
+    return file.path;
   }
 
   Future<_TranscriptNbqResult> _waitForTranscriptPayload(
@@ -1728,19 +2041,6 @@ class _ChatScreenState extends State<ChatScreen> {
     await Navigator.of(
       context,
     ).push(MaterialPageRoute<void>(builder: (_) => const SettingsScreen()));
-    if (!mounted) return;
-    if (_seenClearVersion != ChatSessionSnapshot.clearVersion) {
-      setState(() {
-        _messages.clear();
-        _activeUserAudioPath = null;
-        _activeBotAudioPath = null;
-        _isUserAudioPaused = false;
-        _isBotAudioPaused = false;
-        _isBotAudioPlaying = false;
-        _playingNbqTurnId = null;
-      });
-      _seenClearVersion = ChatSessionSnapshot.clearVersion;
-    }
   }
 
   Future<void> _onBottomNavTap(int index) async {
@@ -2001,17 +2301,25 @@ class _ChatScreenState extends State<ChatScreen> {
                     inputLevel: _micInputLevel,
                     size: micSize,
                     onTap: () async {
-                      if (_isProcessing) {
-                        return;
-                      }
                       if (_isBotAudioPlaying) {
                         await _stopBotAudioPlayback();
-                        return;
                       }
                       if (_isRecording) {
                         HapticFeedback.mediumImpact();
                         await _stopRecordingAndSend();
                         return;
+                      }
+                      if (_isProcessing) {
+                        // Let user interrupt long backend follow-up work
+                        // and start a fresh speaking turn immediately.
+                        _nbqPlaybackGeneration++;
+                        _pendingStreamingTurns.clear();
+                        _turnProcessingInFlight = false;
+                        if (mounted) {
+                          setState(() {
+                            _isProcessing = false;
+                          });
+                        }
                       }
                       await startRecording();
                     },
