@@ -23,10 +23,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(
-            message,
-            style: const TextStyle(color: Colors.black87),
-          ),
+          content: Text(message, style: const TextStyle(color: Colors.black87)),
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 22),
           shape: RoundedRectangleBorder(
@@ -99,9 +96,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     Text(
                       subtitle,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: SaathiBeige.muted,
-                      ),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: SaathiBeige.muted),
                     ),
                   ],
                 ),
@@ -194,18 +191,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
         flexibleSpace: const DecoratedBox(
           decoration: BoxDecoration(gradient: SaathiBeige.backgroundGradient),
         ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(
-            height: 1,
-            color: SaathiBeige.accent.withValues(alpha: 0.2),
+        bottom: const PreferredSize(
+          preferredSize: Size.fromHeight(1.5),
+          child: Divider(
+            height: 1.5,
+            thickness: 1.5,
+            color: SaathiBeige.accentDeep,
           ),
         ),
       ),
       body: DecoratedBox(
-        decoration: const BoxDecoration(gradient: SaathiBeige.backgroundGradient),
+        decoration: const BoxDecoration(
+          gradient: SaathiBeige.backgroundGradient,
+        ),
         child: ListView(
-          padding: EdgeInsets.fromLTRB(16, topInset + kToolbarHeight + 12, 16, 132),
+          padding: EdgeInsets.fromLTRB(
+            16,
+            topInset + kToolbarHeight + 12,
+            16,
+            132,
+          ),
           children: [
             Text(
               'Personalize your app',
