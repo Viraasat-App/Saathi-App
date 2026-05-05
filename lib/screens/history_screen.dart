@@ -461,7 +461,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       if (needsHeader) _dayHeaderPill(context, m.timestamp),
                       MessageBubble(
                         message: m,
-                        onUserAudioTap: m.isUser && !m.isThinking
+                        onUserAudioTap: m.isUser &&
+                                !m.isThinking &&
+                                (m.localUserAudioPath ?? '').trim().isNotEmpty
                             ? () => _playUserAudio(m)
                             : null,
                         isUserAudioActive:
