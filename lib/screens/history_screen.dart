@@ -161,13 +161,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
       return;
     }
     try {
+      await _player.stop();
+      await _player.setFilePath(path);
       if (!mounted) return;
       setState(() {
         _activeAudioPath = path;
         _isAudioPaused = false;
       });
-      await _player.stop();
-      await _player.setFilePath(path);
       unawaited(_player.play());
     } catch (_) {
       if (mounted) {
@@ -239,14 +239,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
       return;
     }
     try {
+      await _tts.stop();
+      await _player.stop();
+      await _player.setFilePath(path);
       if (!mounted) return;
       setState(() {
         _activeAudioPath = path;
         _isAudioPaused = false;
       });
-      await _tts.stop();
-      await _player.stop();
-      await _player.setFilePath(path);
       unawaited(_player.play());
     } catch (_) {
       if (!mounted) return;
