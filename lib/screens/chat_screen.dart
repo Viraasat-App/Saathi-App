@@ -180,6 +180,11 @@ class _ChatScreenState extends State<ChatScreen> {
   StreamSubscription<Uint8List>? _liveAudioSub;
   final BytesBuilder _livePcmBuffer = BytesBuilder(copy: false);
   final BytesBuilder _activeUtterancePcmBuffer = BytesBuilder(copy: false);
+  /// Rolling tail of mic PCM so saved playback includes audio before server VAD
+  /// (`START_SPEECH`). Matches [_liveStreamRecordConfig] 16 kHz mono s16le.
+  static const int _streamPreRollMaxBytes = (16000 * 2 * 12) ~/ 10; // ~1.2s
+  final List<Uint8List> _streamPreRollChunks = [];
+  int _streamPreRollTotalBytes = 0;
   Uint8List? _readyUtterancePcm;
   String _latestPartialTranscript = '';
   bool _serverSpeechActive = false;
@@ -1075,6 +1080,7 @@ class _ChatScreenState extends State<ChatScreen> {
     await _nbqAudioPlayer.stop();
     _livePcmBuffer.clear();
     _activeUtterancePcmBuffer.clear();
+    _clearStreamPreRoll();
     _readyUtterancePcm = null;
     _latestPartialTranscript = '';
     _serverSpeechActive = false;
@@ -1111,6 +1117,10 @@ class _ChatScreenState extends State<ChatScreen> {
           _silenceAutoStopTimer?.cancel();
           _serverSpeechActive = true;
           _activeUtterancePcmBuffer.clear();
+          final preRoll = _snapshotStreamPreRoll();
+          if (preRoll.isNotEmpty) {
+            _activeUtterancePcmBuffer.add(preRoll);
+          }
           _ensureLivePlaceholderMessage();
           return;
         }
@@ -1144,6 +1154,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _liveAudioSub = stream.listen(
         (chunk) {
           _livePcmBuffer.add(chunk);
+          _appendStreamPreRollChunk(chunk);
           if (_serverSpeechActive) {
             _activeUtterancePcmBuffer.add(chunk);
           }
@@ -1610,6 +1621,33 @@ class _ChatScreenState extends State<ChatScreen> {
     return (transcript: parsedTranscript, audioKey: audioKey);
   }
 
+  void _appendStreamPreRollChunk(Uint8List chunk) {
+    if (chunk.isEmpty) return;
+    _streamPreRollChunks.add(chunk);
+    _streamPreRollTotalBytes += chunk.length;
+    while (_streamPreRollTotalBytes > _streamPreRollMaxBytes &&
+        _streamPreRollChunks.isNotEmpty) {
+      final removed = _streamPreRollChunks.removeAt(0);
+      _streamPreRollTotalBytes -= removed.length;
+    }
+  }
+
+  void _clearStreamPreRoll() {
+    _streamPreRollChunks.clear();
+    _streamPreRollTotalBytes = 0;
+  }
+
+  Uint8List _snapshotStreamPreRoll() {
+    if (_streamPreRollTotalBytes == 0) return Uint8List(0);
+    final out = Uint8List(_streamPreRollTotalBytes);
+    var offset = 0;
+    for (final c in _streamPreRollChunks) {
+      out.setRange(offset, offset + c.length, c);
+      offset += c.length;
+    }
+    return out;
+  }
+
   Uint8List _pcm16ToWavBytes(Uint8List pcmBytes, {int sampleRate = 16000}) {
     final totalDataLen = pcmBytes.length;
     final totalLen = 44 + totalDataLen;
@@ -1775,29 +1813,55 @@ class _ChatScreenState extends State<ChatScreen> {
     final baseUri = Uri.parse(_transcriptEndpoint);
     final baseParams = Map<String, String>.from(baseUri.queryParameters);
 
-    final withFileName = {...baseParams, 'fileName': uploadedFileName};
-    final withMessageId = {...baseParams, 'messageId': messageId};
+    final withFullPath = {...baseParams, 'fileName': uploadedFileName};
+    final withIdAsFileName = {...baseParams, 'fileName': messageId};
+    final withMessageIdOnly = {...baseParams, 'messageId': messageId};
 
-    // Try standard encoded query first (original client behavior); some stacks
-    // mis-handle literal slashes in query strings and can appear to hang.
-    return [
+    void addDistinct(List<Uri> out, Uri u) {
+      if (!out.any((e) => e.toString() == u.toString())) {
+        out.add(u);
+      }
+    }
+
+    final out = <Uri>[];
+    // 1–2: Full key `audio-input/.../id.wav` (encoded vs literal slashes for API Gateway).
+    addDistinct(
+      out,
       _transcriptUriWithQuery(
         baseUri,
-        query: withFileName,
+        query: withFullPath,
         literalSlashesInFileName: false,
       ),
+    );
+    addDistinct(
+      out,
       _transcriptUriWithQuery(
         baseUri,
-        query: withFileName,
+        query: withFullPath,
         literalSlashesInFileName: true,
       ),
+    );
+    // 3: Short id as `fileName` (same logical file when backend expects basename only).
+    if (messageId != uploadedFileName) {
+      addDistinct(
+        out,
+        _transcriptUriWithQuery(
+          baseUri,
+          query: withIdAsFileName,
+          literalSlashesInFileName: false,
+        ),
+      );
+    }
+    // 4: `messageId` query (Lambda should treat like fileName once wired).
+    addDistinct(
+      out,
       _transcriptUriWithQuery(
         baseUri,
-        query: withMessageId,
+        query: withMessageIdOnly,
         literalSlashesInFileName: false,
       ),
-      baseUri,
-    ];
+    );
+    return out;
   }
 
   Future<_TranscriptNbqResult?> _fetchTranscriptPayload(
@@ -1845,11 +1909,16 @@ class _ChatScreenState extends State<ChatScreen> {
   _TranscriptNbqResult? _parseTranscriptPayload(dynamic parsed) {
     if (parsed is Map<String, dynamic>) {
       final transcript = _extractTranscriptValue(parsed);
-      if (transcript == null || transcript.trim().isEmpty) return null;
       final nbq = _extractNextBestQuestion(parsed);
       final nbqAudio = _extractNbqAudioUrl(parsed);
+      final hasTranscript = transcript != null && transcript.trim().isNotEmpty;
+      final hasNbq = nbq != null && nbq.trim().isNotEmpty;
+      final hasNbqAudio = nbqAudio != null && nbqAudio.trim().isNotEmpty;
+      // get-transcript often returns only NBQ + presigned URL; still a usable payload.
+      if (!hasTranscript && !hasNbq && !hasNbqAudio) return null;
       return _TranscriptNbqResult(
-        transcript: _userFacingTranscript(transcript.trim()),
+        transcript:
+            hasTranscript ? _userFacingTranscript(transcript.trim()) : '',
         nextBestQuestion: nbq,
         nbqAudioUrl: nbqAudio,
       );
