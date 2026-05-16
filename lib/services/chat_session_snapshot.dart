@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../models/chat_message.dart';
 
 /// In-memory copy of chat bubbles when the home chat screen is disposed (e.g. opening History).
@@ -6,6 +8,7 @@ class ChatSessionSnapshot {
   ChatSessionSnapshot._();
 
   static List<ChatMessage>? _messages;
+  static final ValueNotifier<int> clearSignal = ValueNotifier<int>(0);
 
   static List<ChatMessage>? get current => _messages;
 
@@ -15,5 +18,6 @@ class ChatSessionSnapshot {
 
   static void clear() {
     _messages = null;
+    clearSignal.value = clearSignal.value + 1;
   }
 }

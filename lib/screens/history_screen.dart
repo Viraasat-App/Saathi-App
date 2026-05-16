@@ -1,11 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter_tts/flutter_tts.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../models/chat_message.dart';
 import '../services/chat_history_storage.dart';
@@ -31,7 +28,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
   bool _loading = true;
   final ScrollController _scrollController = ScrollController();
   final AudioPlayer _player = AudioPlayer();
-  final FlutterTts _tts = FlutterTts();
   String? _activeAudioPath;
   bool _isAudioPaused = false;
   StreamSubscription<PlayerState>? _playerStateSub;
@@ -48,38 +44,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         });
       }
     });
-    unawaited(_configureTts());
     _loadHistory();
-  }
-
-  Future<void> _configureTts() async {
-    try {
-      await _tts.awaitSpeakCompletion(true);
-      await _tts.awaitSynthCompletion(true);
-    } catch (_) {}
-  }
-
-  Future<String?> _synthesizeBotSpeechToFile(String text) async {
-    final t = text.trim();
-    if (t.isEmpty) return null;
-    if (kIsWeb) return null;
-    if (!Platform.isAndroid && !Platform.isIOS) return null;
-    try {
-      final docs = await getApplicationDocumentsDirectory();
-      final historyDir = Directory('${docs.path}/chat-audio-history');
-      if (!await historyDir.exists()) {
-        await historyDir.create(recursive: true);
-      }
-      final out =
-          '${historyDir.path}/bot_tts_${DateTime.now().microsecondsSinceEpoch}.wav';
-      await _tts.awaitSynthCompletion(true);
-      await _tts.synthesizeToFile(t, out, true);
-      final f = File(out);
-      if (await f.exists() && await f.length() > 0) return out;
-    } catch (e) {
-      debugPrint('History TTS synthesizeToFile: $e');
-    }
-    return null;
   }
 
   /// Oldest at the top, newest at the bottom. Same timestamp: user before bot.
@@ -139,7 +104,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
     _scrollController.dispose();
     _playerStateSub?.cancel();
     _player.dispose();
-    unawaited(_tts.stop());
     super.dispose();
   }
 
@@ -180,80 +144,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not play this recording')),
       );
-    }
-  }
-
-  Future<void> _playBotAudio(ChatMessage message) async {
-    var path = message.localBotAudioPath;
-    if (path == null || path.isEmpty) {
-      if (message.text.trim().isEmpty) return;
-      final synthesized = await _synthesizeBotSpeechToFile(message.text);
-      if (synthesized != null) {
-        final savedPath = synthesized;
-        path = savedPath;
-        await ChatHistoryStorage.instance.mergeLocalBotAudioPath(
-          message,
-          savedPath,
-        );
-        if (!mounted) return;
-        final refKey = ChatHistoryStorage.messageDedupeKey(message);
-        setState(() {
-          _messages = _messages.map((m) {
-            if (!m.isUser &&
-                !m.isThinking &&
-                ChatHistoryStorage.messageDedupeKey(m) == refKey) {
-              return ChatMessage(
-                text: m.text,
-                isUser: m.isUser,
-                isThinking: m.isThinking,
-                timestamp: m.timestamp,
-                localUserAudioPath: m.localUserAudioPath,
-                localBotAudioPath: savedPath,
-                nbqAwaitingVoice: m.nbqAwaitingVoice,
-                nbqTurnId: m.nbqTurnId,
-                nbqVoiceGeneration: m.nbqVoiceGeneration,
-              );
-            }
-            return m;
-          }).toList();
-        });
-      }
-    }
-    if (path == null || path.isEmpty) {
-      if (message.text.trim().isEmpty) return;
-      try {
-        await _player.stop();
-        await _tts.stop();
-        await _tts.speak(message.text);
-      } catch (_) {}
-      return;
-    }
-    final f = File(path);
-    if (!await f.exists()) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('This response audio is no longer available'),
-        ),
-      );
-      return;
-    }
-    try {
-      await _tts.stop();
-      await _player.stop();
-      await _player.setFilePath(path);
-      if (!mounted) return;
-      setState(() {
-        _activeAudioPath = path;
-        _isAudioPaused = false;
-      });
-      unawaited(_player.play());
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _activeAudioPath = null;
-        _isAudioPaused = false;
-      });
     }
   }
 
@@ -453,9 +343,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   final prev = index == 0 ? null : _messages[index - 1];
                   final needsHeader =
                       prev == null || !_isSameDay(prev.timestamp, m.timestamp);
-                  final hasBotPath = (m.localBotAudioPath ?? '')
-                      .trim()
-                      .isNotEmpty;
                   return Column(
                     children: [
                       if (needsHeader) _dayHeaderPill(context, m.timestamp),
@@ -483,30 +370,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                 m.localUserAudioPath == _activeAudioPath
                             ? _stopAudio
                             : null,
-                        onBotAudioTap:
-                            !m.isUser &&
-                                !m.isThinking &&
-                                m.text.trim().isNotEmpty &&
-                                hasBotPath
-                            ? () => _playBotAudio(m)
-                            : null,
-                        onBotAudioPause:
-                            (m.localBotAudioPath ?? '').isNotEmpty &&
-                                m.localBotAudioPath == _activeAudioPath
-                            ? _pauseOrResumeAudio
-                            : null,
-                        onBotAudioStop:
-                            (m.localBotAudioPath ?? '').isNotEmpty &&
-                                m.localBotAudioPath == _activeAudioPath
-                            ? _stopAudio
-                            : null,
-                        isBotAudioActive:
-                            (m.localBotAudioPath ?? '').isNotEmpty &&
-                            m.localBotAudioPath == _activeAudioPath,
-                        isBotAudioPaused:
-                            (m.localBotAudioPath ?? '').isNotEmpty &&
-                            m.localBotAudioPath == _activeAudioPath &&
-                            _isAudioPaused,
                       ),
                     ],
                   );
