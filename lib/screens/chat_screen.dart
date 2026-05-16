@@ -194,7 +194,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _turnProcessingInFlight = false;
   bool _autoListenArmedByCompletedBotAudio = false;
   Timer? _silenceAutoStopTimer;
-  static const Duration _silenceAutoStopDelay = Duration(seconds: 2);
+  static const Duration _silenceAutoStopDelay = Duration(milliseconds: 1500);
   final StringBuffer _debouncedTranscriptBuffer = StringBuffer();
   final BytesBuilder _debouncedPcmBuffer = BytesBuilder(copy: false);
   int? _debouncedMessageIndex;
