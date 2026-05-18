@@ -192,6 +192,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<({String transcript, Uint8List pcmBytes, int? messageIndex})>
       _pendingStreamingTurns = [];
   bool _turnProcessingInFlight = false;
+  bool _stopInProgress = false;
   bool _autoListenArmedByCompletedBotAudio = false;
   Timer? _silenceAutoStopTimer;
   static const Duration _silenceAutoStopDelay = Duration(milliseconds: 1500);
@@ -1197,44 +1198,50 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _stopRecordingAndSend() async {
-    _stopMicLevelMonitoring();
-    if (mounted) {
-      setState(() => _micInputLevel = 0);
-    }
-    setState(() {
-      _isRecording = false;
-      _isProcessing = true;
-    });
-    _silenceAutoStopTimer?.cancel();
-
-    await _liveAudioSub?.cancel();
-    _liveAudioSub = null;
+    if (_stopInProgress) return;
+    _stopInProgress = true;
     try {
-      await _audioRecorder.stop();
-    } catch (_) {}
-    // Ask server to finalize any buffered speech before closing socket/listeners.
-    try {
-      await _sarvamStreaming.requestFlush();
-      await Future.delayed(const Duration(milliseconds: 900));
-    } catch (_) {}
-    await _liveFinalSub?.cancel();
-    _liveFinalSub = null;
-    await _liveErrorSub?.cancel();
-    _liveErrorSub = null;
-    await _liveSpeechEventSub?.cancel();
-    _liveSpeechEventSub = null;
-    await _livePartialSub?.cancel();
-    _livePartialSub = null;
-    await _sarvamStreaming.close();
-    _serverSpeechActive = false;
-    _readyUtterancePcm = null;
-    _liveTranscriptMessageIndex = null;
-    _flushDebouncedStreamingTurn();
-    await _drainStreamingTurnQueue();
-    if (mounted) {
+      _stopMicLevelMonitoring();
+      if (mounted) {
+        setState(() => _micInputLevel = 0);
+      }
       setState(() {
-        _isProcessing = false;
+        _isRecording = false;
+        _isProcessing = true;
       });
+      _silenceAutoStopTimer?.cancel();
+
+      await _liveAudioSub?.cancel();
+      _liveAudioSub = null;
+      try {
+        await _audioRecorder.stop();
+      } catch (_) {}
+      // Ask server to finalize any buffered speech before closing socket/listeners.
+      try {
+        await _sarvamStreaming.requestFlush();
+        await Future.delayed(const Duration(milliseconds: 900));
+      } catch (_) {}
+      await _liveFinalSub?.cancel();
+      _liveFinalSub = null;
+      await _liveErrorSub?.cancel();
+      _liveErrorSub = null;
+      await _liveSpeechEventSub?.cancel();
+      _liveSpeechEventSub = null;
+      await _livePartialSub?.cancel();
+      _livePartialSub = null;
+      await _sarvamStreaming.close();
+      _serverSpeechActive = false;
+      _readyUtterancePcm = null;
+      _liveTranscriptMessageIndex = null;
+      _flushDebouncedStreamingTurn();
+      await _drainStreamingTurnQueue();
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+        });
+      }
+    } finally {
+      _stopInProgress = false;
     }
   }
 
@@ -1365,29 +1372,11 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     try {
-      ({String transcript, String? audioKey}) streamingResult;
-      try {
-        setUserProgressStage(processingMessageIndex, _stageStreamingTranscription);
-        streamingResult = await _postToStreamingBackend(
-          transcript: trimmed,
-          wavBytes: wavBytes,
-        );
-      } catch (streamErr, streamSt) {
-        debugPrint('Live streaming path failed, falling back: $streamErr');
-        debugPrint('$streamSt');
-        final uploadedFileName = await _uploadRecording(
-          tempWavPath,
-          onStage: (label) => setUserProgressStage(processingMessageIndex, label),
-        );
-        final fallbackPayload = await _waitForTranscriptPayload(
-          uploadedFileName,
-          onStage: (label) => setUserProgressStage(processingMessageIndex, label),
-        );
-        streamingResult = (
-          transcript: fallbackPayload.transcript,
-          audioKey: uploadedFileName,
-        );
-      }
+      setUserProgressStage(processingMessageIndex, _stageStreamingTranscription);
+      final streamingResult = await _postToStreamingBackend(
+        transcript: trimmed,
+        wavBytes: wavBytes,
+      );
       if (!mounted) return;
       final payload = _TranscriptNbqResult(transcript: streamingResult.transcript);
       setState(() {
