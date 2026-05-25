@@ -3,11 +3,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'otp_verification_screen.dart';
+import '../models/auth_flow_mode.dart';
 import '../services/auth_service.dart';
 import '../theme/saathi_beige_theme.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.mode = AuthFlowMode.register});
+
+  /// Whether this is a new-user registration flow (default) or a login flow
+  /// for an existing user. Forwarded to [OtpVerificationScreen].
+  final AuthFlowMode mode;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -33,12 +38,24 @@ class _LoginScreenState extends State<LoginScreen> {
     _useDevelopmentMode = true;
     _authService.setOtpMode(useDevelopmentOtp: true);
     _applyCountryConstraints(_countryCode);
+    _phoneController.addListener(_onPhoneChanged);
   }
 
   @override
   void dispose() {
+    _phoneController.removeListener(_onPhoneChanged);
     _phoneController.dispose();
     super.dispose();
+  }
+
+  void _onPhoneChanged() {
+    if (mounted) setState(() {});
+  }
+
+  bool get _isPhoneComplete {
+    final digits = _phoneController.text.replaceAll(RegExp(r'\D'), '');
+    return digits.length >= _minNationalDigits &&
+        digits.length <= _maxNationalDigits;
   }
 
   void _showMessage(String text) {
@@ -124,7 +141,10 @@ class _LoginScreenState extends State<LoginScreen> {
         Navigator.push(
           context,
           MaterialPageRoute<void>(
-            builder: (_) => OtpVerificationScreen(phoneNumber: normalizedPhone),
+            builder: (_) => OtpVerificationScreen(
+              phoneNumber: normalizedPhone,
+              mode: widget.mode,
+            ),
           ),
         );
     }
@@ -139,7 +159,9 @@ class _LoginScreenState extends State<LoginScreen> {
       backgroundColor: SaathiBeige.cream,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text('Phone login'),
+        title: Text(
+          widget.mode == AuthFlowMode.login ? 'Log In' : 'Register',
+        ),
         centerTitle: true,
         backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
@@ -323,6 +345,17 @@ class _LoginScreenState extends State<LoginScreen> {
                         height: 52,
                         child: ElevatedButton(
                           onPressed: busy ? null : _sendOtp,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _isPhoneComplete && !busy
+                                ? SaathiBeige.accentDeep
+                                : SaathiBeige.sand,
+                            foregroundColor: _isPhoneComplete && !busy
+                                ? Colors.white
+                                : SaathiBeige.muted,
+                            disabledBackgroundColor: SaathiBeige.sand,
+                            disabledForegroundColor: SaathiBeige.muted,
+                            elevation: 0,
+                          ),
                           child: Text(_isSendingOtp ? 'Sending…' : 'Send OTP'),
                         ),
                       ),

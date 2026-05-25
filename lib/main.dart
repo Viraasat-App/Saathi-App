@@ -5,6 +5,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'screens/chat_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/welcome_screen.dart';
 import 'services/auth_storage.dart';
 import 'services/app_settings.dart';
 import 'theme/saathi_beige_theme.dart';
@@ -40,6 +41,7 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     final routes = <String, WidgetBuilder>{
+      '/welcome': (context) => const WelcomeScreen(),
       '/login': (context) => const LoginScreen(),
       '/profile': (context) => const ProfileScreen(),
       '/chat': (context) => const ChatScreen(),
@@ -50,7 +52,7 @@ class _MyAppState extends State<MyApp> {
         return const Scaffold(body: Center(child: CircularProgressIndicator()));
       }
       if (_isLoggedIn == true) return const ChatScreen();
-      return const LoginScreen();
+      return const WelcomeScreen();
     }
 
     return ListenableBuilder(
