@@ -38,9 +38,9 @@ android {
         }
     }
 
-    // Shareable APK name (matches launcher label Saathi_V1).
+    // Shareable APK name (matches launcher label Saathi_V3.2).
     base {
-        archivesName = "Saathi_V1"
+        archivesName = "Saathi_V3.2"
     }
 }
 
@@ -48,7 +48,7 @@ flutter {
     source = "../.."
 }
 
-// After release build, mirror Gradle's named APK as Saathi_V1.apk for sharing.
+// After release build, mirror Gradle's named APK as Saathi_V3.2.apk for sharing.
 // Use configureEach so debug-only invocations do not fail if release task is absent.
 tasks.matching { it.name == "assembleRelease" }.configureEach {
     doLast {
@@ -56,12 +56,12 @@ tasks.matching { it.name == "assembleRelease" }.configureEach {
             layout.buildDirectory
                 .get()
                 .asFile
-                .resolve("outputs/apk/release/Saathi_V1-release.apk")
+                .resolve("outputs/apk/release/Saathi_V3.2-release.apk")
         val dest =
             layout.buildDirectory
                 .get()
                 .asFile
-                .resolve("outputs/flutter-apk/Saathi_V1.apk")
+                .resolve("outputs/flutter-apk/Saathi_V3.2.apk")
         if (namedApk.isFile) {
             dest.parentFile?.mkdirs()
             namedApk.copyTo(dest, overwrite = true)

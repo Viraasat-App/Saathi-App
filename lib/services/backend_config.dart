@@ -33,4 +33,16 @@ abstract final class BackendConfig {
     defaultValue:
         'https://vjn4mbb7xi.execute-api.ap-south-1.amazonaws.com/getMemories',
   );
+
+  static const String userDetailsEndpoint = String.fromEnvironment(
+    'USER_DETAILS_ENDPOINT',
+    defaultValue:
+        'https://4gws7olyt8.execute-api.ap-south-1.amazonaws.com/getUserDetails',
+  );
+
+  static const String updateUserDetailsEndpoint = String.fromEnvironment(
+    'UPDATE_USER_DETAILS_ENDPOINT',
+    defaultValue:
+        'https://55vs64ukdl.execute-api.ap-south-1.amazonaws.com/updateUserDetails',
+  );
 }

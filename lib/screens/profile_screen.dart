@@ -8,6 +8,7 @@ import '../services/chat_history_storage.dart';
 import '../services/chat_session_snapshot.dart';
 import '../services/profile_storage.dart';
 import '../services/profile_sync_service.dart';
+import '../services/user_details_service.dart';
 import '../theme/saathi_beige_theme.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -18,6 +19,16 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
+  static const List<String> _genderItems = ['Male', 'Female', 'Other'];
+  static const List<String> _languageItems = [
+    'English',
+    'Hindi',
+    'Tamil',
+    'Telugu',
+    'Kannada',
+    'Other',
+  ];
+
   final _formKey = GlobalKey<FormState>();
 
   final TextEditingController _phoneController = TextEditingController();
@@ -35,6 +46,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isEditing = true;
   String? _userId;
   String? _phoneNumber;
+  UserProfile? _existingProfile;
 
   void _showSystemPopup(String message) {
     final messenger = ScaffoldMessenger.of(context);
@@ -64,7 +76,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     await AuthService.instance.signOut();
     await AuthStorage.instance.logout();
     if (!mounted) return;
-    Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
+    Navigator.pushNamedAndRemoveUntil(context, '/welcome', (route) => false);
   }
 
   Future<void> _confirmLogout() async {
@@ -119,16 +131,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _phoneNumber = phoneNumber;
       _phoneController.text = phoneNumber ?? '';
       if (profile != null) {
+        _existingProfile = profile;
         _nameController.text = profile.name;
-        _ageController.text = profile.age.toString();
-        _gender = profile.gender;
-        _language = profile.language;
+        _ageController.text = profile.age > 0 ? profile.age.toString() : '';
+        // Guard against dropdown asserts: only adopt values that exist in
+        // the items list (case-insensitive); otherwise leave null so user
+        // can pick one in edit mode.
+        _gender = _matchDropdownValue(profile.gender, _genderItems);
+        _language = _matchDropdownValue(profile.language, _languageItems);
         _cityController.text = profile.city;
         _occupationController.text = profile.occupation;
         _hobbiesController.text = profile.hobbies;
-        _isEditing = false;
+        final hasUsableData = profile.name.trim().isNotEmpty &&
+            profile.age > 0 &&
+            _gender != null &&
+            _language != null;
+        _isEditing = !hasUsableData;
       }
     });
+  }
+
+  String? _matchDropdownValue(String value, List<String> items) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return null;
+    for (final item in items) {
+      if (item.toLowerCase() == trimmed.toLowerCase()) {
+        return item;
+      }
+    }
+    return null;
   }
 
   @override
@@ -183,6 +214,54 @@ class _ProfileScreenState extends State<ProfileScreen> {
       hobbies: _hobbiesController.text.trim(),
     );
 
+    // Edit flow: an existing profile is loaded → PUT only the changed fields
+    // to /updateUserDetails. First-time registration (no existing profile)
+    // continues to use the create-memory sync below.
+    if (_existingProfile != null) {
+      final changes = _diffProfile(_existingProfile!, profile);
+      if (changes.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _isSaving = false;
+          _isEditing = false;
+        });
+        _showSystemPopup('No changes to save.');
+        return;
+      }
+
+      final result = await UserDetailsService.instance.updateUserDetails(
+        userId: userId,
+        phoneNumber: phoneNumber,
+        changes: changes,
+      );
+
+      if (!mounted) return;
+      switch (result) {
+        case UpdateUserDetailsSuccess(:final profile):
+          await ProfileStorage.instance.saveUserProfile(profile);
+          setState(() {
+            _existingProfile = profile;
+            _nameController.text = profile.name;
+            _ageController.text = profile.age > 0
+                ? profile.age.toString()
+                : '';
+            _gender = _matchDropdownValue(profile.gender, _genderItems);
+            _language = _matchDropdownValue(profile.language, _languageItems);
+            _cityController.text = profile.city;
+            _occupationController.text = profile.occupation;
+            _hobbiesController.text = profile.hobbies;
+            _isSaving = false;
+            _isEditing = false;
+          });
+          _showSystemPopup('Profile updated successfully');
+        case UpdateUserDetailsFailure(:final message):
+          setState(() => _isSaving = false);
+          _showSystemPopup(message);
+      }
+      return;
+    }
+
+    // First-time registration path (no existing profile yet).
     await ProfileStorage.instance.saveUserProfile(profile);
     final syncResult = await ProfileSyncService.instance.syncProfile(
       session: session,
@@ -193,6 +272,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() {
       _isSaving = false;
       _isEditing = false;
+      _existingProfile = profile;
     });
     switch (syncResult) {
       case ProfileSyncFailure(:final message):
@@ -201,6 +281,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _showSystemPopup('Profile saved and synced');
     }
     Navigator.pushReplacementNamed(context, '/chat');
+  }
+
+  /// Returns the JSON-ready map of fields that differ between [previous]
+  /// and [next]. Only includes keys recognized by the update API.
+  Map<String, dynamic> _diffProfile(UserProfile previous, UserProfile next) {
+    final changes = <String, dynamic>{};
+    if (previous.name != next.name) changes['name'] = next.name;
+    if (previous.age != next.age) changes['age'] = next.age;
+    if (previous.gender != next.gender) changes['gender'] = next.gender;
+    if (previous.language != next.language) {
+      changes['language'] = next.language;
+    }
+    if (previous.city != next.city) changes['city'] = next.city;
+    if (previous.occupation != next.occupation) {
+      changes['occupation'] = next.occupation;
+    }
+    if (previous.hobbies != next.hobbies) changes['hobbies'] = next.hobbies;
+    return changes;
   }
 
   static const _inputRadius = 16.0;
@@ -278,15 +376,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final genderItems = const ['Male', 'Female', 'Other'];
-    final languageItems = const [
-      'English',
-      'Hindi',
-      'Tamil',
-      'Telugu',
-      'Kannada',
-      'Other',
-    ];
+    const genderItems = _genderItems;
+    const languageItems = _languageItems;
     final disabledFill = scheme.surfaceContainerHighest.withValues(alpha: 0.75);
     final displayName = _nameController.text.trim().isEmpty
         ? 'Your profile'
